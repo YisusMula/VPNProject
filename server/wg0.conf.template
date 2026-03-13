@@ -1,0 +1,42 @@
+# WireGuard server configuration template
+# Rendered automatically by scripts/setup-server.sh
+# Variables in {{ }} are substituted at generation time.
+#
+# Manual usage (advanced):
+#   Copy rendered output to /etc/wireguard/wg0.conf on the VPN server, or
+#   mount it into the wg-easy container via:
+#     volumes:
+#       - ./server/wg0.conf:/etc/wireguard/wg0.conf
+
+[Interface]
+Address    = 10.8.0.1/24
+ListenPort = {{ WG_PORT }}
+PrivateKey = {{ SERVER_PRIVKEY }}
+PostUp     = sysctl -w net.ipv4.ip_forward=1; \
+             iptables -A FORWARD -i %i -j ACCEPT; \
+             iptables -A FORWARD -o %i -j ACCEPT; \
+             iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown   = iptables -D FORWARD -i %i -j ACCEPT; \
+             iptables -D FORWARD -o %i -j ACCEPT; \
+             iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+# ---- Site-A (main home network: {{ SITE_A_LAN }}) ------
+[Peer]
+PublicKey           = {{ SITE_A_PUBKEY }}
+PresharedKey        = {{ SITE_A_PSK }}
+AllowedIPs          = {{ SITE_A_VPN_IP }}/32, {{ SITE_A_LAN }}
+PersistentKeepalive = 25
+
+# ---- Site-B (secondary network: {{ SITE_B_LAN }}) ------
+[Peer]
+PublicKey           = {{ SITE_B_PUBKEY }}
+PresharedKey        = {{ SITE_B_PSK }}
+AllowedIPs          = {{ SITE_B_VPN_IP }}/32, {{ SITE_B_LAN }}
+PersistentKeepalive = 25
+
+# ---- Road-warrior (full-tunnel) -------------------------
+[Peer]
+PublicKey           = {{ RW_PUBKEY }}
+PresharedKey        = {{ RW_PSK }}
+AllowedIPs          = {{ ROAD_WARRIOR_START_IP }}/32
+PersistentKeepalive = 25

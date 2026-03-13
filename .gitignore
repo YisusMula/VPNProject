@@ -1,0 +1,23 @@
+# =============================================================
+# VPNProject – .gitignore
+# =============================================================
+
+# --- Secrets (NEVER commit) ---
+.env
+keys/
+server/wg0.conf
+client/site-a/
+client/site-b/
+client/road-warrior/
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# --- Docker build artifacts ---
+*.log

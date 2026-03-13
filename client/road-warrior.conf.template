@@ -1,0 +1,23 @@
+# WireGuard client template – Road-warrior (full tunnel)
+# Rendered by: ./scripts/setup-client.sh road-warrior
+# Variables in {{ }} are substituted at generation time.
+#
+# Import into:
+#   - WireGuard desktop app (Windows/macOS/Linux)
+#   - WireGuard mobile app  (Android/iOS) – scan client/road-warrior/wg0.png
+
+[Interface]
+Address    = {{ ROAD_WARRIOR_VPN_IP }}/32
+PrivateKey = {{ ROAD_WARRIOR_PRIVKEY }}
+# All DNS queries go through the VPN – prevents DNS leaks that could
+# reveal your real location to streaming platforms.
+DNS        = {{ WG_DEFAULT_DNS }}
+
+[Peer]
+PublicKey           = {{ SERVER_PUBKEY }}
+PresharedKey        = {{ ROAD_WARRIOR_PSK }}
+Endpoint            = {{ WG_HOST }}:{{ WG_PORT }}
+# Full tunnel: routes ALL traffic (including streaming) through the VPN.
+# Your external IP will be the VPN server's public IP.
+AllowedIPs          = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
