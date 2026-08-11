@@ -55,9 +55,14 @@ services:
     ports:
       # Túnel WireGuard. Es el único puerto que hay que reenviar desde internet.
       - "${WG_PORT:-51820}:51820/udp"
-      # Interfaz de administración, restringida a la IP local del servidor:
-      # nunca debe quedar expuesta a internet.
-      - "${WG_UI_BIND:-127.0.0.1}:51821:51821/tcp"
+      # Panel de administración. Desde internet NO es alcanzable en ningún caso:
+      # lo único que se reenvía en el router es el UDP del túnel.
+      # Se publica en todas las interfaces a propósito. Fijarlo a la IP local
+      # concreta ataba el arranque a que esa dirección siguiera existiendo: si
+      # el DHCP se la cambiaba al servidor, Docker fallaba con "cannot assign
+      # requested address" y no arrancaba el contenedor entero, dejando sin
+      # túnel. Para aislamiento estricto: WG_UI_BIND=127.0.0.1 y túnel SSH.
+      - "${WG_UI_BIND:-0.0.0.0}:51821:51821/tcp"
 
     cap_add:
       - NET_ADMIN

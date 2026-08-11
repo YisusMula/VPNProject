@@ -207,3 +207,98 @@ load_env_file() {
   source "$file"
   set +a
 }
+
+# =============================================================================
+# Cliente de la API del panel
+# -----------------------------------------------------------------------------
+# Cuatro scripts necesitan hablar con el panel. Tener la sesión aquí evita que
+# cuatro copias de la misma lógica se vayan separando: ya pasó con el mensaje de
+# error del login, que culpaba al servidor cuando la causa era la contraseña.
+#
+# Uso:
+#   api_init            # prepara el tarro de cookies y la URL base
+#   api_login           # autentica, o aborta con un mensaje que dice la causa
+#   api_get <ruta>
+#   api_post <ruta> [json]
+#   api_delete <ruta>
+# =============================================================================
+
+API_URL=""
+API_COOKIE_JAR=""
+
+api_init() {
+  local bind="${WG_UI_BIND:-127.0.0.1}"
+  # 0.0.0.0 significa "todas las interfaces": para hablar con el panel desde el
+  # propio servidor hay que dirigirse a una dirección concreta.
+  [[ "$bind" == "0.0.0.0" ]] && bind="127.0.0.1"
+  API_URL="http://${bind}:51821"
+
+  API_COOKIE_JAR="$(mktemp)"
+  # shellcheck disable=SC2064  # se quiere expandir la ruta ahora, no al salir
+  trap "rm -f '$API_COOKIE_JAR'" EXIT
+}
+
+# --noproxy: el panel es local y nunca debe salir por el proxy del sistema.
+_api_curl() {
+  curl -fsS --max-time 10 --noproxy '*' \
+    -b "$API_COOKIE_JAR" -c "$API_COOKIE_JAR" "$@"
+}
+
+api_login() {
+  [[ -n "${WG_EASY_PASSWORD:-}" ]] \
+    || die "WG_EASY_PASSWORD no está definido en .env"
+
+  local code
+  code="$(curl -sS --max-time 10 --noproxy '*' -o /dev/null -w '%{http_code}' \
+    -b "$API_COOKIE_JAR" -c "$API_COOKIE_JAR" \
+    -X POST "$API_URL/api/session" \
+    -H 'Content-Type: application/json' \
+    -d "{\"password\":$(json_string "$WG_EASY_PASSWORD")}" \
+    2>/dev/null || true)"
+
+  # Se distingue por código HTTP: "no responde" y "contraseña mala" son dos
+  # problemas con arreglos distintos, y el mensaje debe decir cuál es.
+  case "$code" in
+    2*) return 0 ;;
+    401|403)
+      die "El panel rechazó la contraseña. Revisa WG_EASY_PASSWORD en .env; si la cambiaste, ejecuta ./deploy.sh para regenerar el hash." ;;
+    000)
+      die "El panel no responde en $API_URL. Comprueba que está arrancado:  docker compose ps" ;;
+    *)
+      die "Respuesta inesperada del panel al iniciar sesión (HTTP $code)." ;;
+  esac
+}
+
+api_get()    { _api_curl "$API_URL$1"; }
+api_delete() { _api_curl -X DELETE "$API_URL$1"; }
+
+api_post() {
+  local path="$1" body="${2:-}"
+  if [[ -n "$body" ]]; then
+    _api_curl -X POST "$API_URL$path" -H 'Content-Type: application/json' -d "$body"
+  else
+    _api_curl -X POST "$API_URL$path"
+  fi
+}
+
+# Listado de dispositivos, tal cual lo devuelve el panel.
+api_clients_json() { api_get "/api/wireguard/client"; }
+
+# Codifica una cadena como literal JSON, con sus comillas. Necesario porque la
+# contraseña puede llevar comillas o barras invertidas.
+json_string() {
+  printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+}
+
+# Imprime el id del dispositivo con ese nombre, o nada si no existe.
+api_client_id_by_name() {
+  local name="$1"
+  api_clients_json | python3 -c '
+import json, sys
+nombre = sys.argv[1]
+for c in json.load(sys.stdin):
+    if c.get("name") == nombre:
+        print(c["id"])
+        break
+' "$name"
+}

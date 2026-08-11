@@ -147,6 +147,36 @@ else
   check_warn "No se pudo leer net.ipv4.ip_forward."
 fi
 
+# Cómo se publica el panel. Importa porque una elección desafortunada aquí no
+# degrada el panel: impide que arranque el servidor entero y te deja sin túnel.
+UI_BIND="${WG_UI_BIND:-0.0.0.0}"
+if [[ "$UI_BIND" == "0.0.0.0" ]]; then
+  check_ok "El panel se publica en todas las interfaces (no ata el arranque a una IP)."
+  # Único escenario en que 0.0.0.0 sí sería arriesgado: sin NAT por delante, el
+  # panel quedaría expuesto a internet.
+  if [[ "$NAT_STATE" != "unknown" ]] && ((NAT_LEVELS == 0)); then
+    check_warn "Pero no se detecta NAT por delante de este equipo."
+    accion "Sin un router haciendo NAT, el panel podría ser alcanzable desde internet."
+    accion "Si este equipo tiene IP pública directa, restringe el panel:"
+    accion "    añade  WG_UI_BIND=127.0.0.1  a .env y ejecuta ./deploy.sh"
+    accion "    luego entra por túnel SSH:  ssh -L 51821:127.0.0.1:51821 usuario@servidor"
+  fi
+elif [[ "$UI_BIND" == "127.0.0.1" ]]; then
+  check_ok "El panel sólo escucha en local (acceso por túnel SSH)."
+else
+  check_warn "El panel está atado a la dirección concreta $UI_BIND."
+  accion "Si el DHCP le cambia la IP a este equipo, Docker no podrá publicar el"
+  accion "puerto y el servidor VPN NO ARRANCARÁ, dejándote sin túnel."
+  # Comprobación directa: ¿esa dirección sigue existiendo en el anfitrión?
+  if has_cmd ip && ! ip -4 -oneline addr show 2>/dev/null | grep -q "inet $UI_BIND/"; then
+    check_fail "Y esa dirección YA NO existe en este equipo."
+    accion "El servidor no podrá arrancar. Arréglalo ahora:"
+    accion "    quita la línea WG_UI_BIND de .env y ejecuta ./deploy.sh"
+  else
+    accion "Recomendado: quita la línea WG_UI_BIND de .env y ejecuta ./deploy.sh"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 head1 "4. El puerto $WG_PORT/UDP visto desde fuera"
 # ---------------------------------------------------------------------------
@@ -155,14 +185,49 @@ head1 "4. El puerto $WG_PORT/UDP visto desde fuera"
 # callan. Por eso sólo se afirma que está abierto cuando hay prueba positiva
 # (una negociación real), y en el resto de casos se dice "no concluyente" en
 # lugar de mandar al usuario a reconfigurar routers que quizá ya estaban bien.
+# Los datos de los dispositivos se piden a la API del panel, que ya devuelve
+# nombre, dirección y última conexión en una sola llamada. Un prefijo de clave
+# pública no identifica nada para quien usa esto.
+#
+# Si la API no responde (panel caído, contraseña cambiada a mano), se recurre a
+# 'wg show'. Entonces sólo hay claves, y el informe LO DICE en lugar de
+# presentarlas como si fueran nombres.
+CLIENTES_JSON=""
+FUENTE_DATOS="ninguna"
 HANDSHAKES=""
+
 if [[ "$CONTENEDOR_OK" == "si" ]]; then
-  HANDSHAKES="$(docker exec wg-easy wg show wg0 latest-handshakes 2>/dev/null || true)"
+  if has_cmd python3 && [[ -n "${WG_EASY_PASSWORD:-}" ]]; then
+    api_init
+    # Aquí no se usa api_login: aborta el script, y el diagnóstico debe seguir
+    # con las demás comprobaciones aunque el panel no deje entrar.
+    if curl -sS --max-time 5 --noproxy '*' -o /dev/null \
+         -b "$API_COOKIE_JAR" -c "$API_COOKIE_JAR" \
+         -X POST "$API_URL/api/session" -H 'Content-Type: application/json' \
+         -d "{\"password\":$(json_string "$WG_EASY_PASSWORD")}" 2>/dev/null; then
+      CLIENTES_JSON="$(api_clients_json 2>/dev/null || true)"
+      [[ -n "$CLIENTES_JSON" ]] && FUENTE_DATOS="api"
+    fi
+  fi
+
+  if [[ "$FUENTE_DATOS" != "api" ]]; then
+    HANDSHAKES="$(docker exec wg-easy wg show wg0 latest-handshakes 2>/dev/null || true)"
+    [[ -n "$HANDSHAKES" ]] && FUENTE_DATOS="wg"
+  fi
 fi
 
 PEERS_TOTAL=0
 PEERS_CON_HANDSHAKE=0
-if [[ -n "$HANDSHAKES" ]]; then
+
+if [[ "$FUENTE_DATOS" == "api" ]]; then
+  read -r PEERS_TOTAL PEERS_CON_HANDSHAKE < <(
+    printf '%s' "$CLIENTES_JSON" | python3 -c '
+import json, sys
+cs = json.load(sys.stdin)
+print(len(cs), sum(1 for c in cs if c.get("latestHandshakeAt")))
+'
+  )
+elif [[ "$FUENTE_DATOS" == "wg" ]]; then
   while read -r _pub ts; do
     [[ -n "${ts:-}" ]] || continue
     PEERS_TOTAL=$((PEERS_TOTAL + 1))
@@ -201,16 +266,49 @@ if [[ "$CONTENEDOR_OK" != "si" ]]; then
 elif ((PEERS_TOTAL == 0)); then
   check_warn "No hay ningún dispositivo dado de alta."
   accion "Crea uno con:  ./scripts/add-client.sh movil"
-else
+elif [[ "$FUENTE_DATOS" == "api" ]]; then
   check_ok "$PEERS_TOTAL dispositivos dados de alta, $PEERS_CON_HANDSHAKE han conectado alguna vez."
+  printf '%s' "$CLIENTES_JSON" | python3 -c '
+import json, sys
+from datetime import datetime, timezone
+
+cs = json.load(sys.stdin)
+ahora = datetime.now(timezone.utc)
+
+def hace(iso):
+    if not iso:
+        return "nunca ha conectado"
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    s = int((ahora - t).total_seconds())
+    if s < 60:
+        return f"última conexión hace {s} s"
+    if s < 3600:
+        return f"última conexión hace {s // 60} min"
+    if s < 86400:
+        return f"última conexión hace {s // 3600} h"
+    return f"última conexión hace {s // 86400} d"
+
+ancho = max(len(c.get("name") or "?") for c in cs)
+for c in sorted(cs, key=lambda x: x.get("name") or ""):
+    nombre = c.get("name") or "?"
+    cuando = hace(c.get("latestHandshakeAt"))
+    print(f"        {nombre:<{ancho}}  {cuando}")
+'
+else
+  check_warn "No se pudieron obtener los NOMBRES de los dispositivos desde el panel."
+  accion "Lo que sigue son claves públicas, NO nombres: no esperes reconocerlos."
+  accion "Para verlos por su nombre:  ./scripts/list-clients.sh"
   AHORA="$(date +%s)"
   while read -r pub ts; do
     [[ -n "${ts:-}" ]] || continue
     CORTO="${pub:0:12}…"
     if [[ "$ts" == "0" ]]; then
-      printf '        %-16s nunca ha conectado\n' "$CORTO"
+      printf '        (clave) %-16s nunca ha conectado\n' "$CORTO"
     else
-      printf '        %-16s última conexión hace %s s\n' "$CORTO" "$((AHORA - ts))"
+      printf '        (clave) %-16s última conexión hace %s s\n' "$CORTO" "$((AHORA - ts))"
     fi
   done <<<"$HANDSHAKES"
 fi

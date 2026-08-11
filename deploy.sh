@@ -109,7 +109,7 @@ fi
 WG_HOST="${CLI_WG_HOST:-${WG_HOST:-}}"
 WG_PORT="${CLI_WG_PORT:-${WG_PORT:-51820}}"
 WG_EASY_PASSWORD="${CLI_WG_EASY_PASSWORD:-${WG_EASY_PASSWORD:-}}"
-WG_UI_BIND="${CLI_WG_UI_BIND:-${WG_UI_BIND:-$LAN_IP}}"
+WG_UI_BIND="${CLI_WG_UI_BIND:-${WG_UI_BIND:-0.0.0.0}}"
 DUCKDNS_SUBDOMAIN="${CLI_DUCKDNS_SUBDOMAIN:-${DUCKDNS_SUBDOMAIN:-}}"
 DUCKDNS_TOKEN="${CLI_DUCKDNS_TOKEN:-${DUCKDNS_TOKEN:-}}"
 
@@ -174,9 +174,13 @@ WG_HOST=$WG_HOST
 # Puerto UDP del túnel. Es el único que hay que reenviar en los routers.
 WG_PORT=$WG_PORT
 
-# Dirección en la que escucha el panel de administración.
-# Autodetectada: la IP de este servidor en tu red local ($IFACE).
-# Accesible desde tu casa, nunca desde internet (ese puerto no se reenvía).
+# Dirección en la que se publica el panel de administración.
+# 0.0.0.0 = todas las interfaces. Accesible desde tu red de casa, nunca desde
+# internet: en el router sólo se reenvía el puerto UDP del túnel.
+#
+# NO pongas aquí la IP local del servidor: si el DHCP se la cambia, Docker no
+# puede publicar el puerto y el servidor VPN deja de arrancar entero.
+# Para aislamiento estricto usa 127.0.0.1 y llega por túnel SSH.
 WG_UI_BIND=$WG_UI_BIND
 
 # Contraseña del panel de administración, en claro.
@@ -245,7 +249,14 @@ fi
 docker compose "${COMPOSE_ARGS[@]}" up -d
 
 # El panel tarda un par de segundos en aceptar peticiones.
-UI_URL="http://${WG_UI_BIND}:51821"
+# La IP local sólo se usa para MOSTRAR una URL que el usuario pueda teclear:
+# el panel se publica en todas las interfaces, y "http://0.0.0.0:51821" no
+# sirve de nada escrito en un navegador.
+if [[ "$WG_UI_BIND" == "0.0.0.0" ]]; then
+  UI_URL="http://${LAN_IP}:51821"
+else
+  UI_URL="http://${WG_UI_BIND}:51821"
+fi
 info "Esperando a que el panel responda en $UI_URL ..."
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 2 --noproxy '*' "$UI_URL/api/session" >/dev/null 2>&1; then

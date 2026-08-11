@@ -165,15 +165,15 @@ literal.** Vuelve a generarlos para que usen el dominio.
 
 ---
 
-## Añadir dispositivos
+## Tus dispositivos
 
 ```bash
-./scripts/add-client.sh portatil
-./scripts/add-client.sh movil-ana
-./scripts/add-client.sh tablet
+./scripts/add-client.sh portatil      # dar de alta
+./scripts/list-clients.sh             # ver cuáles hay y cuándo conectaron
+./scripts/remove-client.sh portatil   # revocar
 ```
 
-Cada uno recibe sus propias claves. Te deja la configuración en
+Cada dispositivo recibe sus propias claves. Te deja la configuración en
 `clients/<nombre>.conf` y te pinta el código QR en la terminal.
 
 - **Móvil**: instala [WireGuard](https://www.wireguard.com/install/) y escanea
@@ -186,6 +186,42 @@ avisarte).
 
 Instala `qrencode` si quieres ver los QR en la terminal:
 `sudo apt install qrencode`.
+
+### Si pierdes el móvil
+
+```bash
+./scripts/remove-client.sh movil
+```
+
+Deja de conectar **en el momento**. Te muestra sus datos y te pide confirmación
+antes, porque no hay vuelta atrás: para volver a usar ese dispositivo hay que
+darlo de alta otra vez, con claves nuevas. No afecta al resto.
+
+### Elegir cuánto tráfico pasa por casa
+
+```bash
+./scripts/add-client.sh tele                 # túnel completo (por defecto)
+./scripts/add-client.sh portatil --solo-lan  # sólo tu red de casa
+```
+
+| | Túnel completo | Sólo-LAN |
+|---|---|---|
+| Llegas a tu red de casa | Sí | Sí |
+| Sales con la IP de tu casa | **Sí** | No |
+| Sirve para streaming | **Sí** | No |
+| Te protege en WiFi público | **Sí** | No |
+| Consume la subida de tu casa | Todo el tráfico | Sólo lo que va a tu red |
+
+El **túnel completo es el que quieres** para ver tus canales fuera de casa y
+para conectarte con tranquilidad desde el WiFi de un hotel: es el modo por
+defecto y no tienes que hacer nada.
+
+El **sólo-LAN** tiene sentido en un portátil de trabajo del que sólo necesitas
+llegar al NAS: no hace pasar por tu casa las descargas ni las videollamadas.
+A cambio, en un WiFi público ese tráfico va sin proteger.
+
+Puedes tener dispositivos de los dos tipos a la vez, e incluso el mismo aparato
+con dos túneles importados y elegir cuál activas.
 
 ---
 
@@ -258,19 +294,36 @@ Es opcional. Sin ella todo funciona igual para el uso normal.
 
 **Panel web.** Lo dice `deploy.sh` al terminar (algo como
 `http://192.168.1.50:51821`). Sirve para ver quién está conectado, añadir o
-borrar dispositivos y descargar configuraciones. Sólo es accesible desde tu red
-de casa: su puerto no se reenvía, así que desde internet no existe.
+borrar dispositivos y descargar configuraciones.
 
-**Copia de seguridad.** Todo el estado vive en un único volumen de Docker,
-`vpnproject_wg_data`: las claves del servidor y las de todos los dispositivos.
-Si lo pierdes, hay que regenerar todos los dispositivos.
+Es accesible desde tu red de casa, **nunca desde internet**: en el router sólo
+se reenvía el puerto UDP del túnel, jamás el del panel. Si quieres cerrarlo aún
+más, pon `WG_UI_BIND=127.0.0.1` en `.env` y entra por túnel SSH:
 
 ```bash
-docker run --rm -v vpnproject_wg_data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/vpn-backup.tar.gz -C /data .
+ssh -L 51821:127.0.0.1:51821 usuario@tu-servidor   # y abre http://localhost:51821
 ```
 
-Guarda ese fichero fuera del equipo. **Contiene claves privadas.**
+> No pongas ahí la IP local de tu servidor. Si el DHCP se la cambia, Docker no
+> puede publicar el puerto y **el servidor VPN no arranca**: no se cae el panel,
+> te quedas sin túnel. `doctor.sh` te avisa si detecta esa configuración.
+
+**Copia de seguridad.** Todo el estado vive en un único volumen de Docker: las
+claves del servidor y las de todos los dispositivos. Si lo pierdes, hay que dar
+de alta todos los dispositivos otra vez, uno a uno.
+
+```bash
+./scripts/backup.sh                                    # crear
+./scripts/backup.sh --restaurar backups/vpn-....tar.gz # restaurar
+```
+
+El fichero queda en `backups/` (fuera de git). **Contiene las claves privadas de
+todos tus dispositivos en claro**: guárdalo fuera del equipo y trátalo como la
+contraseña del router.
+
+La restauración para el servidor, reemplaza el estado y lo vuelve a levantar.
+Comprueba antes que el fichero es válido, así que un archivo corrupto no te deja
+a medias.
 
 **Órdenes útiles.**
 
@@ -320,8 +373,11 @@ VPNProject/
 ├── docker-compose.yml        # servidor VPN + DDNS opcional
 ├── .env.example              # referencia de las variables
 ├── scripts/
-│   ├── lib.sh                # autodetección de red y utilidades
+│   ├── lib.sh                # autodetección de red, utilidades, API del panel
 │   ├── add-client.sh         # alta de dispositivos
+│   ├── list-clients.sh       # listado de dispositivos
+│   ├── remove-client.sh      # revocación de dispositivos
+│   ├── backup.sh             # copia y restauración
 │   └── doctor.sh             # diagnóstico (sólo lectura)
 └── openspec/                 # especificación del proyecto
 ```

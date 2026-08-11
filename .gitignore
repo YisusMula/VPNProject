@@ -13,6 +13,9 @@
 # las imágenes que se añadan a la documentación.
 clients/
 
+# Copias de seguridad: contienen las claves privadas de TODOS los dispositivos.
+backups/
+
 # Restos de esquemas anteriores del proyecto, por si alguien
 # actualiza desde una versión previa con claves en disco.
 keys/
