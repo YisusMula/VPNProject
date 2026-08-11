@@ -66,6 +66,17 @@ existe la subred VPN**: ven tráfico procedente de la IP local del servidor. Por
 eso no hace falta añadir una ruta estática `10.8.0.0/24 → servidor` en el router,
 que es exactamente el paso manual que queremos evitar.
 
+*Verificación de los dos saltos de enmascarado* (no son suposiciones):
+
+1. El primero lo aplica la imagen en su `WG_POST_UP` por defecto, leído de
+   `/app/config.js`:
+   `iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $WG_DEVICE -j MASQUERADE`.
+2. El segundo lo instala Docker en el anfitrión al crear la red del proyecto.
+   Comprobado con `iptables -t nat -L POSTROUTING`:
+   `MASQUERADE 172.19.0.0/16 → 0.0.0.0/0` para todo lo que **no** salga por el
+   bridge del proyecto. El tráfico hacia la LAN doméstica sale por la interfaz
+   física, así que la regla casa y el origen pasa a ser la IP local del servidor.
+
 *Alternativa descartada — ruta estática en el router*: es la solución "limpia"
 (los dispositivos LAN verían las IPs reales de los clientes VPN y podrían
 iniciar conexiones hacia ellos), pero exige entrar al Archer y al Huawei a
@@ -103,11 +114,28 @@ modelo de configuración bajo los pies del usuario.
 
 ### D5 — No se sobrescribe `WG_POST_UP` / `WG_POST_DOWN`
 
-La configuración actual fija `-o eth0` en las reglas de `MASQUERADE`. Ese nombre
-de interfaz es el que la imagen resuelve por defecto en tiempo de arranque, pero
-codificarlo lo vuelve frágil ante cualquier cambio del entorno de red de Docker.
-Se retiran ambos overrides y se usan los valores por defecto de la imagen, que ya
-aplican `FORWARD ACCEPT` + `MASQUERADE` sobre la interfaz de salida real.
+Se retiran ambos overrides y se usan los valores por defecto de la imagen.
+
+*Motivo real* (corregido tras leer `/app/config.js` de la imagen): la ventaja no
+está en el nombre de la interfaz. La imagen **también** usa `eth0`, porque su
+variable `WG_DEVICE` lo lleva codificado como valor por defecto; no lo resuelve
+en arranque. Una versión anterior de esta decisión afirmaba lo contrario y era
+falsa.
+
+La ventaja está en la **precisión de la regla**. El override que había aplicaba
+un `MASQUERADE` general sobre todo lo que saliera por la interfaz. El valor por
+defecto de la imagen enmascara únicamente la subred del túnel:
+
+```
+iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $WG_DEVICE -j MASQUERADE
+```
+
+Además abre el puerto UDP en `INPUT`, que el override omitía.
+
+`WG_DEVICE` se declara explícitamente en el Compose, con el mismo valor `eth0`,
+para que quede a la vista que se refiere a la interfaz **del contenedor** —
+correcta bajo la red bridge de Docker— y no a la del anfitrión. Sólo habría que
+cambiarlo al pasar el servicio a `network_mode: host`.
 
 ### D6 — DDNS como servicio opcional dentro del mismo Compose
 

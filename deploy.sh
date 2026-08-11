@@ -50,6 +50,9 @@ docker info >/dev/null 2>&1 \
   || die "Docker está instalado pero no responde. Arráncalo con: sudo systemctl start docker (o ejecuta este script con sudo)."
 require_cmd ip "Instala iproute2:  sudo apt install iproute2"
 require_cmd curl "Instala curl:  sudo apt install curl"
+# Lo necesita scripts/add-client.sh para hablar con la API del panel. Se
+# comprueba aquí para fallar antes de desplegar, no al final.
+require_cmd python3 "Instala python3:  sudo apt install python3"
 
 ok "Docker, Compose v2 y utilidades de red disponibles"
 

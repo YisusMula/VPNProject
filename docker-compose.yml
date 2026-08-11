@@ -20,6 +20,10 @@ services:
       # dominio DDNS si lo hay, IP pública detectada si no.
       - WG_HOST=${WG_HOST}
       - WG_PORT=${WG_PORT:-51820}
+      # Puerto que se escribe en las configuraciones de cliente, por si el
+      # router reenvía un puerto externo distinto (operadoras que filtran el
+      # 51820). Vacío = se usa WG_PORT.
+      - WG_CONFIG_PORT=${WG_CONFIG_PORT:-}
       # DNS que usan los clientes. Va por el túnel, así que no hay fugas de DNS.
       - WG_DEFAULT_DNS=${WG_DEFAULT_DNS:-1.1.1.1,8.8.8.8}
       - WG_DEFAULT_ADDRESS=${WG_DEFAULT_ADDRESS:-10.8.0.x}
@@ -34,10 +38,14 @@ services:
       - WG_ALLOWED_IPS=0.0.0.0/0
       # Mantiene viva la asociación NAT de los routers intermedios.
       - WG_PERSISTENT_KEEPALIVE=25
-      # No se define WG_POST_UP / WG_POST_DOWN: los valores por defecto de la
-      # imagen resuelven la interfaz de salida en tiempo de arranque. Fijar el
-      # nombre de la interfaz a mano rompe el enmascarado si Docker la nombra de
-      # otro modo, y el síntoma es "el túnel conecta pero no hay internet".
+      # Interfaz por la que el CONTENEDOR sale (no la del anfitrión). En la red
+      # bridge por defecto de Docker siempre es eth0, que es justo el valor por
+      # defecto de la imagen; se declara explícito para que quede a la vista.
+      # Sólo hay que cambiarlo si se pasa el servicio a network_mode: host.
+      - WG_DEVICE=${WG_DEVICE:-eth0}
+      # No se definen WG_POST_UP / WG_POST_DOWN: los valores por defecto de la
+      # imagen ya enmascaran sólo la subred del túnel hacia WG_DEVICE, que es
+      # más preciso que un MASQUERADE general.
 
     volumes:
       # Único estado persistente del proyecto: claves del servidor y de todos

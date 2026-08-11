@@ -72,11 +72,28 @@
 > **Alcance de la verificación.** El entorno donde se implementó este cambio no
 > puede crear interfaces WireGuard (`wg0`), así que `wg-easy` no llega a
 > arrancar del todo en él. Las tareas que dependen de la API del panel (3.7,
-> 5.1–5.4) y del estado de los peers (6.4, 6.6) se verificaron contra
-> simuladores de la API de wg-easy v14 y de `docker`, no contra el servidor
-> real. Todo lo demás —autodetección, generación de `.env`, idempotencia,
-> arranque del stack, perfiles, diagnóstico de red— se ejecutó de verdad.
-> Queda pendiente una prueba end-to-end en el equipo doméstico de destino.
+> 5.1–5.4) y del estado de los peers (6.4, 6.6) se ejercitaron contra
+> simuladores de la API de wg-easy v14 y de `docker`. Todo lo demás
+> —autodetección, generación de `.env`, idempotencia, arranque del stack,
+> perfiles, requisitos previos, diagnóstico de red— se ejecutó de verdad.
+>
+> Para que las pruebas con simulador no fueran circulares (un simulador escrito
+> a partir de suposiciones sólo confirma las suposiciones), los contratos
+> externos se contrastaron contra las imágenes reales:
+>
+> - Rutas y cuerpos de la API, leídos de `/app/lib/Server.js` y
+>   `/app/lib/WireGuard.js` de `wg-easy:14`: coinciden con lo implementado.
+>   `id` resultó ser un UUID y no un entero, tratado ya como cadena opaca.
+> - Variables de entorno de la imagen, leídas de `/app/config.js`. De ahí salió
+>   la corrección de la decisión D5 y el hallazgo de `WG_CONFIG_PORT`.
+> - Contrato del contenedor DDNS (`SUBDOMAINS`, `TOKEN`, `LOG_FILE`), ejecutado
+>   y comprobado en sus registros.
+> - Los dos saltos de enmascarado de la decisión D2, comprobados en las reglas
+>   reales de `iptables -t nat`.
+>
+> Queda pendiente una prueba end-to-end en el equipo doméstico de destino:
+> túnel levantado desde una red externa, acceso a un equipo de la LAN y salida
+> a internet con la IP del hogar.
 
 - [x] 9.1 Pasar `bash -n` sobre todos los scripts. Verificar: `for f in deploy.sh scripts/*.sh; do bash -n "$f"; done` sin salida
 - [x] 9.2 Pasar `shellcheck` sobre todos los scripts si está disponible. Verificar: sin avisos de severidad error

@@ -32,6 +32,9 @@ ENV_FILE="$REPO_ROOT/.env"
 load_env_file "$ENV_FILE"
 
 require_cmd curl "Instala curl:  sudo apt install curl"
+# Se usa para construir y leer el JSON de la API del panel. Viene de serie en
+# Raspberry Pi OS, Debian y Ubuntu, pero no en instalaciones mínimas.
+require_cmd python3 "Instala python3:  sudo apt install python3"
 
 UI_HOST="${WG_UI_BIND:-127.0.0.1}"
 UI_URL="http://${UI_HOST}:51821"
