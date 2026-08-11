@@ -1,0 +1,34 @@
+schema: spec-driven
+
+context: |
+  VPNProject — servidor VPN WireGuard self-hosted para uso doméstico.
+
+  Objetivo del proyecto: que una persona no experta pueda desplegar un servidor
+  VPN en una máquina de su casa (Raspberry Pi, mini-PC, NAS) y conectarse desde
+  fuera para (a) acceder a los dispositivos de su LAN y (b) salir a internet con
+  la IP pública de su casa (streaming con geolocalización del hogar).
+
+  Restricciones del entorno real del usuario:
+  - IP pública dinámica (requiere DDNS).
+  - Router principal Huawei de la operadora + router TP-Link Archer secundario
+    en modo router => doble NAT, hay que reenviar el puerto en ambos.
+  - Posible CGNAT: debe detectarse antes de perder tiempo configurando.
+
+  Principio rector: "abrir puertos y poco más". Toda configuración que pueda
+  autodetectarse debe autodetectarse. Cero edición manual de ficheros como
+  camino feliz.
+
+  Stack: Docker Compose + wg-easy (imagen ghcr.io/wg-easy/wg-easy:14, dirigida
+  por variables de entorno) + scripts Bash POSIX-friendly con `set -euo pipefail`.
+  Documentación de cara al usuario en español.
+
+rules:
+  proposal:
+    - Escribir en español
+    - Justificar cada elemento de configuración que se elimina o automatiza
+  design:
+    - Escribir en español
+    - Documentar explícitamente el comportamiento bajo doble NAT y CGNAT
+  tasks:
+    - Escribir en español
+    - Cada tarea debe ser verificable con un comando concreto
