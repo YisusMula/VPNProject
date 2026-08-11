@@ -1,18 +1,13 @@
-version: "3.8"
-
-# ============================================================
-# WireGuard VPN Stack
-# ============================================================
-# Prerequisites:
-#   - Docker ≥ 20.10 and Docker Compose v2
-#   - Linux host with kernel ≥ 5.6 (WireGuard built-in) or
-#     wireguard-tools + wireguard-dkms on older kernels
-#   - UDP port ${WG_PORT} open in the server firewall
+# ============================================================================
+# Servidor VPN WireGuard para uso doméstico
+# ============================================================================
+# No arranques esto a mano: ejecuta ./deploy.sh, que genera el .env que este
+# fichero necesita y activa el perfil de DDNS si procede.
 #
-# Quick start:
-#   cp .env.example .env && nano .env
-#   docker compose up -d
-# ============================================================
+# Se ancla la serie 14 de la imagen a propósito: se configura entera por
+# variables de entorno, lo que permite un despliegue desatendido. Las series
+# posteriores exigen completar un asistente desde el navegador.
+# ============================================================================
 
 services:
   wg-easy:
@@ -21,50 +16,79 @@ services:
     restart: unless-stopped
 
     environment:
-      # Public hostname / IP that clients use to reach this server
+      # Punto de conexión que se escribe en cada configuración de cliente:
+      # dominio DDNS si lo hay, IP pública detectada si no.
       - WG_HOST=${WG_HOST}
-      # UDP listen port (must match the host port mapping below)
       - WG_PORT=${WG_PORT:-51820}
-      # Default DNS pushed to connecting clients
+      # Puerto que se escribe en las configuraciones de cliente, por si el
+      # router reenvía un puerto externo distinto (operadoras que filtran el
+      # 51820). Vacío = se usa WG_PORT.
+      - WG_CONFIG_PORT=${WG_CONFIG_PORT:-}
+      # DNS que usan los clientes. Va por el túnel, así que no hay fugas de DNS.
       - WG_DEFAULT_DNS=${WG_DEFAULT_DNS:-1.1.1.1,8.8.8.8}
-      # Default client address pool
       - WG_DEFAULT_ADDRESS=${WG_DEFAULT_ADDRESS:-10.8.0.x}
-      # Web-UI password (plaintext or bcrypt hash)
-      - PASSWORD=${WG_EASY_PASSWORD:-changeme}
-      # Allow traffic between peers (needed for site-to-site)
-      - WG_ALLOWED_IPS=0.0.0.0/0,::/0
-      # Keep-alive so NAT mappings stay alive (seconds)
+      # Hash bcrypt de la contraseña del panel. La imagen rechaza de plano la
+      # contraseña en texto claro. Lo calcula deploy.sh y lo pasa por entorno,
+      # no por .env: un hash bcrypt lleva '$' y compose los interpretaría.
+      - PASSWORD_HASH=${PASSWORD_HASH}
+      # Túnel completo: da a la vez acceso a la LAN de casa y salida a internet
+      # por la IP del hogar, sin rutas manuales en el dispositivo cliente.
+      # Sólo IPv4: ver decisión D11 en openspec (IPv6 no aporta nada aquí y
+      # rompe el arranque en equipos con IPv6 deshabilitado en el kernel).
+      - WG_ALLOWED_IPS=0.0.0.0/0
+      # Mantiene viva la asociación NAT de los routers intermedios.
       - WG_PERSISTENT_KEEPALIVE=25
-      # Enable IP forwarding inside the container
-      - WG_PRE_UP=sysctl -w net.ipv4.ip_forward=1 && sysctl -w net.ipv6.conf.all.forwarding=1
-      # Masquerade outbound traffic so road-warriors reach the internet
-      - WG_POST_UP=iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-      - WG_POST_DOWN=iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+      # Interfaz por la que el CONTENEDOR sale (no la del anfitrión). En la red
+      # bridge por defecto de Docker siempre es eth0, que es justo el valor por
+      # defecto de la imagen; se declara explícito para que quede a la vista.
+      # Sólo hay que cambiarlo si se pasa el servicio a network_mode: host.
+      - WG_DEVICE=${WG_DEVICE:-eth0}
+      # No se definen WG_POST_UP / WG_POST_DOWN: los valores por defecto de la
+      # imagen ya enmascaran sólo la subred del túnel hacia WG_DEVICE, que es
+      # más preciso que un MASQUERADE general.
 
     volumes:
-      # Persist WireGuard config and peer keys across container restarts
+      # Único estado persistente del proyecto: claves del servidor y de todos
+      # los clientes. Si se pierde este volumen, hay que regenerar los clientes.
       - wg_data:/etc/wireguard
 
     ports:
-      # WireGuard UDP tunnel
+      # Túnel WireGuard. Es el único puerto que hay que reenviar desde internet.
       - "${WG_PORT:-51820}:51820/udp"
-      # wg-easy web UI (bind to localhost only; use a reverse-proxy for HTTPS in production)
-      - "127.0.0.1:51821:51821/tcp"
+      # Interfaz de administración, restringida a la IP local del servidor:
+      # nunca debe quedar expuesta a internet.
+      - "${WG_UI_BIND:-127.0.0.1}:51821:51821/tcp"
 
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
 
+    # No se declara net.ipv6.conf.all.forwarding: en equipos con IPv6
+    # deshabilitado en el kernel ese sysctl no existe y el contenedor ni
+    # siquiera arranca, con un error que no apunta a la causa.
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv6.conf.all.forwarding=1
 
     healthcheck:
       test: ["CMD", "wg", "show"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # Actualiza el registro DuckDNS con la IP pública actual del hogar.
+  # Sólo arranca si deploy.sh detecta un token configurado (perfil "ddns").
+  # Hereda restart: unless-stopped, así que sobrevive a reinicios sin cron.
+  ddns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: wg-ddns
+    restart: unless-stopped
+    profiles: ["ddns"]
+    environment:
+      - SUBDOMAINS=${DUCKDNS_SUBDOMAIN:-}
+      - TOKEN=${DUCKDNS_TOKEN:-}
+      - LOG_FILE=false
+      - TZ=${TZ:-Europe/Madrid}
 
 volumes:
   wg_data:

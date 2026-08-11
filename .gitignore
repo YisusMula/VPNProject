@@ -2,15 +2,24 @@
 # VPNProject – .gitignore
 # =============================================================
 
-# --- Secrets (NEVER commit) ---
+# --- Secretos: NUNCA deben subirse -----------------------------
+# Contiene la contraseña del panel y el hash bcrypt.
 .env
+.env.tmp
+
+# Configuraciones de dispositivo: cada una lleva su clave privada.
+# Cubre también cualquier QR que se exporte ahí, que es la clave en imagen.
+# No se ignoran *.png ni *.svg en general: eso ocultaría, sin avisar,
+# las imágenes que se añadan a la documentación.
+clients/
+
+# Restos de esquemas anteriores del proyecto, por si alguien
+# actualiza desde una versión previa con claves en disco.
 keys/
 server/wg0.conf
-client/site-a/
-client/site-b/
-client/road-warrior/
+client/
 
-# --- OS / editor noise ---
+# --- Ruido del sistema y del editor ----------------------------
 .DS_Store
 Thumbs.db
 *.swp
@@ -19,5 +28,5 @@ Thumbs.db
 .idea/
 .vscode/
 
-# --- Docker build artifacts ---
+# --- Registros -------------------------------------------------
 *.log

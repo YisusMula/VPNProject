@@ -1,205 +1,331 @@
 # VPNProject
 
-> **Self-hosted WireGuard VPN** — unifies two LANs as a single network and lets you route streaming traffic through your home IP while travelling.
+> Servidor VPN WireGuard para tu casa. Conéctate desde fuera, entra en tu red
+> local y navega con la IP pública de tu hogar.
+
+Cuando estás fuera y activas el túnel:
+
+- **Ves tu red de casa** como si estuvieras en el salón: NAS, impresora,
+  cámaras, el panel del router… con sus IPs de siempre.
+- **Sales a internet por tu conexión de casa.** Las plataformas de streaming
+  ven la IP de tu casa, no la del hotel, la del aeropuerto o la del país donde
+  estés.
+- **Todo va cifrado**, incluidas las consultas DNS. En un WiFi público, nadie
+  ve qué haces.
 
 ---
 
-## Architecture
+## Lo que tienes que hacer
 
-```
-Internet
-    │
-    ▼
-┌───────────────────────────────────────────┐
-│  VPN Server  (VPS or home router + DDNS)  │
-│  WireGuard   10.8.0.1   UDP :51820        │
-│  wg-easy web UI   TCP :51821 (local)      │
-└────────────┬──────────────────────────────┘
-             │  WireGuard tunnel (UDP/encrypted)
-    ┌────────┴────────┐
-    │                 │
-┌───┴──────┐   ┌──────┴─────┐   ┌──────────────────┐
-│ Site-A   │   │  Site-B    │   │  Road-warrior    │
-│ Gateway  │   │  Gateway   │   │  (laptop/phone)  │
-│ 10.8.0.2 │   │  10.8.0.3  │   │  10.8.0.10       │
-│          │   │            │   │                  │
-│192.168.  │   │ 192.168.   │   │  Full tunnel:    │
-│1.0/24    │   │ 2.0/24     │   │  0.0.0.0/0       │
-└──────────┘   └────────────┘   └──────────────────┘
+Tres cosas. Sólo la segunda requiere que pienses.
+
+```bash
+git clone <este-repo> && cd VPNProject
+./deploy.sh
 ```
 
-| Peer | VPN IP | Purpose |
-|------|--------|---------|
-| VPN Server | 10.8.0.1 | Hub — routes between all peers |
-| Site-A gateway | 10.8.0.2 | Main home network (192.168.1.0/24) |
-| Site-B gateway | 10.8.0.3 | Secondary / office network (192.168.2.0/24) |
-| Road-warrior | 10.8.0.10+ | Laptop / phone while travelling |
+Luego **abres un puerto en el router** (sección siguiente) y escaneas el código
+QR que te ha pintado el script. Ya está.
 
-**Site-to-site**: Devices on Site-A can reach devices on Site-B by their real LAN IPs, and vice-versa — no manual routing needed on end devices.
-
-**Road-warrior (full tunnel)**: All traffic, including streaming, exits through the VPN server's public IP. Streaming platforms (Netflix, Disney+, etc.) see the server's IP — typically the same one as your home connection if you self-host on a home server.
+`deploy.sh` detecta solo tu interfaz de red, tu IP local, tu subred y tu IP
+pública, genera el `.env`, levanta el servidor y crea el primer dispositivo. No
+tienes que editar ningún fichero antes de ejecutarlo.
 
 ---
 
-## Prerequisites
+## Qué necesitas
 
-| Component | Requirement |
-|-----------|-------------|
-| VPN Server OS | Linux, kernel ≥ 5.6 (Ubuntu 22.04+, Debian 11+, etc.) |
-| Docker | ≥ 20.10 with Compose v2 |
-| wireguard-tools | `apt install wireguard-tools` (for key generation) |
-| Firewall | UDP port **51820** open inbound on the server |
-| Site gateways | Linux machine/router with `ip_forward` capability |
-| Client devices | WireGuard app ([windows](https://www.wireguard.com/install/), [macOS](https://apps.apple.com/app/wireguard/id1451685025), [Android](https://play.google.com/store/apps/details?id=com.wireguard.android), [iOS](https://apps.apple.com/app/wireguard/id1441195209)) |
-| Optional | `qrencode` for mobile QR codes: `apt install qrencode` |
+| | |
+|---|---|
+| Un equipo encendido en casa | Raspberry Pi, mini-PC, NAS, un portátil viejo… |
+| Linux con kernel ≥ 5.6 | `uname -r` para comprobarlo |
+| Docker con Compose v2 | `curl -fsSL https://get.docker.com \| sh` |
+| Acceso al router | Para abrir un puerto |
+| **Una IP pública de verdad** | Ni CGNAT ni nada raro — se explica más abajo |
 
----
-
-## Quick Start
-
-### 1 — Configure the environment
-
-```bash
-cp .env.example .env
-nano .env          # set WG_HOST to your server's public IP or domain
-```
-
-Minimum required:
-
-```ini
-WG_HOST=203.0.113.42          # or vpn.yourdomain.com
-WG_PORT=51820
-SITE_A_LAN=192.168.1.0/24
-SITE_B_LAN=192.168.2.0/24
-WG_EASY_PASSWORD=S3cur3P@ss!  # web UI password
-```
-
-### 2 — Start the VPN server (on the VPS / home server)
-
-```bash
-./scripts/setup-server.sh
-```
-
-This script:
-1. Generates key pairs for all peers under `keys/` (idempotent)
-2. Renders `server/wg0.conf` with real keys
-3. Starts the Docker Compose stack (`wg-easy`)
-
-### 3 — Configure the Site-A gateway
-
-Run on the machine that acts as the gateway for your main LAN:
-
-```bash
-# On the VPN server — generate the config
-./scripts/setup-client.sh site-a
-
-# Copy the config to the Site-A gateway
-scp client/site-a/wg0.conf user@site-a-gateway:/etc/wireguard/wg0.conf
-
-# On the Site-A gateway — start WireGuard
-sudo wg-quick up wg0
-sudo systemctl enable wg-quick@wg0   # persist across reboots
-```
-
-### 4 — Configure the Site-B gateway
-
-```bash
-./scripts/setup-client.sh site-b
-scp client/site-b/wg0.conf user@site-b-gateway:/etc/wireguard/wg0.conf
-# On Site-B gateway:
-sudo wg-quick up wg0
-sudo systemctl enable wg-quick@wg0
-```
-
-### 5 — Configure a road-warrior client (streaming while travelling)
-
-```bash
-./scripts/setup-client.sh road-warrior
-# If qrencode is installed, a QR code is also saved to:
-#   client/road-warrior/wg0.png
-```
-
-Import `client/road-warrior/wg0.conf` into the WireGuard app, or scan the QR code with your phone.
-
-Once connected, **all** traffic (including Netflix, Disney+, etc.) exits through the VPN server's IP.
+El equipo servidor conviene que tenga **IP fija en tu red local** (reserva por
+DHCP en el router). Si cambia de IP, el reenvío del puerto dejará de apuntar a
+donde debe.
 
 ---
 
-## Web UI
+## Abrir el puerto
 
-`wg-easy` provides a browser-based interface to manage peers without editing config files:
+Es el único paso manual, y donde falla casi todo el mundo. Hay que reenviar
+**un solo puerto: 51820/UDP** hasta el equipo servidor.
+
+Ejecuta primero:
 
 ```bash
-# Reach the UI via SSH tunnel (recommended — never expose port 51821 directly)
-ssh -L 51821:127.0.0.1:51821 user@your-server
-# Then open: http://localhost:51821
+./scripts/doctor.sh
 ```
 
-From the UI you can add new peers, download their configs, and view live traffic stats.
+Te dirá cuántos routers hay en el camino y te escribirá la regla exacta de cada
+uno, con las IPs ya rellenadas.
+
+### Si tienes un solo router
+
+Una regla y listo:
+
+| Campo | Valor |
+|---|---|
+| Protocolo | **UDP** (no TCP) |
+| Puerto externo | `51820` |
+| Puerto interno | `51820` |
+| IP destino | la del equipo servidor, p.ej. `192.168.1.50` |
+
+### Si tienes dos routers en cascada
+
+Es el caso típico de **router de la operadora (Huawei, Movistar, etc.) + un
+segundo router (TP-Link Archer y similares) en modo router**. El segundo crea
+su propia red dentro de la del primero, así que hay **dos NAT** que atravesar y
+**hay que poner la regla en los dos**. Con una sola no entra nada.
+
+Supongamos que el Huawei da la red `192.168.1.x`, el Archer da `192.168.0.x`, y
+el servidor está en `192.168.0.50`:
+
+**1. En el Archer** (el más cercano al servidor):
+
+| Campo | Valor |
+|---|---|
+| Protocolo | UDP |
+| Puerto externo / interno | `51820` |
+| IP destino | `192.168.0.50` ← el servidor |
+
+**2. En el Huawei** (el de la operadora):
+
+| Campo | Valor |
+|---|---|
+| Protocolo | UDP |
+| Puerto externo / interno | `51820` |
+| IP destino | la **IP WAN del Archer**, p.ej. `192.168.1.2` |
+
+Esa IP WAN la ves en el Archer, en la pantalla de estado, como "dirección IP de
+internet" o "WAN IP". Conviene fijarla también por DHCP en el Huawei.
+
+### Mejor todavía: quítate un router de en medio
+
+Si el Archer sólo te hace falta por su WiFi, **ponlo en modo punto de acceso**
+(*Access Point* / *modo AP* / *bridge*, según el firmware). Deja de crear una
+red propia, todos los equipos quedan en la red del Huawei, y entonces **sólo
+tienes que abrir el puerto en el Huawei**. Menos configuración y menos cosas que
+se rompan.
 
 ---
 
-## Verifying the Setup
+## Antes de nada: ¿tienes CGNAT?
+
+Si tu operadora te tiene detrás de **CGNAT**, no compartes una IP pública
+propia: la compartes con más clientes. **Ningún reenvío de puertos funcionará**,
+por mucho que lo configures bien.
 
 ```bash
-# On the VPN server — check peers are connected
-docker exec wg-easy wg show
+./scripts/doctor.sh
+```
 
-# From Site-A, ping a device on Site-B's LAN
-ping 192.168.2.100
+La primera sección te lo dice. Si sale CGNAT, tienes tres salidas:
 
-# From Site-B, ping a device on Site-A's LAN
-ping 192.168.1.100
+1. **Pedir una IP pública a tu operadora.** Muchas la dan gratis si la pides.
+   Es la solución buena.
+2. **Alquilar un VPS barato** y montar ahí el servidor. Pierdes la "IP de tu
+   casa" para el streaming, que probablemente sea justo lo que buscabas.
+3. **Usar una malla tipo Tailscale o ZeroTier**, que atraviesan CGNAT. No
+   necesitan abrir puertos, pero son otro proyecto distinto a este.
 
-# Road-warrior: confirm your public IP is the VPN server's
-curl https://api.ipify.org
+Compruébalo **antes** de pelearte con los routers.
+
+---
+
+## Tu IP pública cambia: configura DDNS
+
+Casi todas las conexiones domésticas tienen **IP dinámica**: la operadora te la
+cambia cada cierto tiempo. Cuando eso pasa, los dispositivos que apuntaban a la
+IP antigua dejan de conectar de golpe.
+
+La solución es un dominio que se actualice solo:
+
+1. Entra en [duckdns.org](https://www.duckdns.org), inicia sesión y crea un
+   subdominio (gratis, 30 segundos).
+2. Copia el **token**.
+3. Ejecuta:
+
+```bash
+DUCKDNS_SUBDOMAIN=mi-casa DUCKDNS_TOKEN=tu-token-aqui ./deploy.sh
+```
+
+A partir de ahí, un contenedor mantiene `mi-casa.duckdns.org` apuntando a tu IP
+actual, también después de reiniciar el equipo, y los dispositivos nuevos se
+generan contra ese dominio.
+
+> ¿Usas otro proveedor de DDNS? Deja `DUCKDNS_*` vacíos, pon tu dominio en
+> `WG_HOST` dentro de `.env` y encárgate tú del registro.
+
+**Los dispositivos creados antes de configurar DDNS siguen apuntando a la IP
+literal.** Vuelve a generarlos para que usen el dominio.
+
+---
+
+## Añadir dispositivos
+
+```bash
+./scripts/add-client.sh portatil
+./scripts/add-client.sh movil-ana
+./scripts/add-client.sh tablet
+```
+
+Cada uno recibe sus propias claves. Te deja la configuración en
+`clients/<nombre>.conf` y te pinta el código QR en la terminal.
+
+- **Móvil**: instala [WireGuard](https://www.wireguard.com/install/) y escanea
+  el QR.
+- **Escritorio**: WireGuard → *Importar túnel desde archivo* → el `.conf`.
+
+Un nombre por dispositivo. Si intentas repetir uno, el script se niega en lugar
+de sobrescribir las claves del que ya existe (que dejaría de conectar sin
+avisarte).
+
+Instala `qrencode` si quieres ver los QR en la terminal:
+`sudo apt install qrencode`.
+
+---
+
+## Comprobar que funciona
+
+```bash
+./scripts/doctor.sh
+```
+
+Revisa la conexión, CGNAT, los niveles de NAT, el servidor, el reenvío IP, los
+dispositivos y la sincronía del DDNS. Cada fallo viene con la acción concreta
+que lo arregla. No toca nada: es sólo lectura.
+
+**La prueba de verdad** es esta, y no admite discusión:
+
+1. Coge el móvil y **apaga el WiFi** (datos móviles).
+2. Activa el túnel de WireGuard.
+3. Abre [whatismyip.com](https://whatismyip.com): debe salir **la IP de tu
+   casa**.
+4. Entra en la IP de tu router o de tu NAS: debe responder.
+
+Comprobar un puerto UDP desde fuera no es fiable (un puerto abierto y uno
+filtrado callan igual), por eso `doctor.sh` dice "no concluyente" en vez de
+inventarse un diagnóstico. La conexión real desde datos móviles es lo único
+que lo confirma.
+
+---
+
+## Cómo funciona
+
+Tus dispositivos se conectan en **túnel completo** (`AllowedIPs = 0.0.0.0/0`):
+absolutamente todo el tráfico entra por el túnel. Eso resuelve las dos cosas a
+la vez —ver tu red y salir por tu IP— sin configurar ninguna ruta en el móvil.
+
+Para llegar a los equipos de tu red, el tráfico se enmascara dos veces:
+
+```
+tu móvil (10.8.0.2)
+   → túnel cifrado → servidor VPN
+   → enmascarado → sale con la IP local del servidor (192.168.1.50)
+   → tu NAS, tu impresora, tu router…
+```
+
+La consecuencia práctica es que **los equipos de tu casa no necesitan saber que
+la VPN existe**. Ven tráfico que viene del servidor, de su misma red. Por eso no
+hay que añadir rutas estáticas en el router: ese paso manual desaparece.
+
+El precio: los equipos de tu red no distinguen qué dispositivo VPN les habla, y
+no pueden iniciar conexiones hacia ellos. Para uso doméstico da igual.
+
+<details>
+<summary>Mejora opcional: ruta estática en el router</summary>
+
+Si quieres que los equipos de tu LAN vean las IPs reales de los dispositivos VPN
+(`10.8.0.x`) y puedan iniciar conexiones hacia ellos, añade en tu router una
+ruta estática:
+
+| Campo | Valor |
+|---|---|
+| Red destino | `10.8.0.0` |
+| Máscara | `255.255.255.0` |
+| Puerta de enlace | la IP local del servidor VPN |
+
+Es opcional. Sin ella todo funciona igual para el uso normal.
+</details>
+
+---
+
+## Mantenimiento
+
+**Panel web.** Lo dice `deploy.sh` al terminar (algo como
+`http://192.168.1.50:51821`). Sirve para ver quién está conectado, añadir o
+borrar dispositivos y descargar configuraciones. Sólo es accesible desde tu red
+de casa: su puerto no se reenvía, así que desde internet no existe.
+
+**Copia de seguridad.** Todo el estado vive en un único volumen de Docker,
+`vpnproject_wg_data`: las claves del servidor y las de todos los dispositivos.
+Si lo pierdes, hay que regenerar todos los dispositivos.
+
+```bash
+docker run --rm -v vpnproject_wg_data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/vpn-backup.tar.gz -C /data .
+```
+
+Guarda ese fichero fuera del equipo. **Contiene claves privadas.**
+
+**Órdenes útiles.**
+
+```bash
+docker compose ps                      # estado
+docker compose logs -f wg-easy         # registros en vivo
+docker compose restart wg-easy         # reiniciar
+docker compose pull && ./deploy.sh     # actualizar
 ```
 
 ---
 
-## File Structure
+## Problemas frecuentes
+
+| Síntoma | Causa habitual | Solución |
+|---|---|---|
+| El túnel no conecta desde fuera | Falta el reenvío del puerto, o sólo está en uno de los dos routers | Repasa "Abrir el puerto". Con dos routers hacen falta **dos** reglas |
+| No conecta y `doctor.sh` dice CGNAT | Tu operadora no te da IP pública propia | Pídesela, o cambia de enfoque. No hay arreglo por configuración |
+| Funcionaba y de pronto dejó de ir | Te cambió la IP pública | Configura DDNS |
+| El contenedor se reinicia sin parar | Al kernel le falta WireGuard | `sudo apt install wireguard-dkms wireguard-tools` |
+| Conecta pero no hay internet | Falta el enmascarado o el reenvío IP | `./scripts/doctor.sh`, apartado 3 |
+| Conecta, hay internet, pero no veo mi NAS | El servidor no está en la misma subred que el NAS, o el NAS tiene cortafuegos | Comprueba la subred del servidor y las reglas del NAS |
+| El streaming me sigue viendo fuera | Fuga de DNS | Comprueba en [dnsleaktest.com](https://dnsleaktest.com) que sale tu DNS de casa |
+| El panel rechaza la contraseña | Cambiaste `WG_EASY_PASSWORD` a mano | `./deploy.sh` para recalcular el hash |
+
+---
+
+## Seguridad
+
+- Cada dispositivo tiene su propio par de claves. Se generan en el servidor y
+  la privada sólo viaja en el fichero que tú importas.
+- El puerto del panel de administración **nunca** se reenvía a internet.
+- `.env` y `clients/` están en `.gitignore` y se crean con permisos `600`. No
+  se sube ninguna clave al repositorio.
+- Si pierdes un dispositivo, bórralo desde el panel: deja de conectar al
+  instante, sin tocar a los demás.
+- La contraseña del panel se guarda como hash bcrypt, que es lo único que el
+  contenedor acepta.
+
+---
+
+## Estructura
 
 ```
 VPNProject/
-├── docker-compose.yml          # wg-easy server stack
-├── .env.example                # documented environment variables
-├── .gitignore                  # prevents secrets from being committed
+├── deploy.sh                 # despliegue completo, un solo comando
+├── docker-compose.yml        # servidor VPN + DDNS opcional
+├── .env.example              # referencia de las variables
 ├── scripts/
-│   ├── generate-keys.sh        # generate WireGuard key pairs (idempotent)
-│   ├── setup-server.sh         # render server config + start Docker stack
-│   └── setup-client.sh         # render client config for a given role
-├── server/
-│   └── wg0.conf.template       # annotated server config template
-└── client/
-    ├── site-a.conf.template    # Site-A gateway template
-    ├── site-b.conf.template    # Site-B gateway template
-    └── road-warrior.conf.template  # Full-tunnel client template
+│   ├── lib.sh                # autodetección de red y utilidades
+│   ├── add-client.sh         # alta de dispositivos
+│   └── doctor.sh             # diagnóstico (sólo lectura)
+└── openspec/                 # especificación del proyecto
 ```
 
-> **Git safety**: `keys/`, `server/wg0.conf`, and `client/*/wg0.conf` are in `.gitignore`.  
-> Private key material and pre-shared keys are **never** committed.
-
----
-
-## Security Notes
-
-- Private keys are generated locally and never leave the machines where they are used.
-- Pre-shared keys (PSK) add a layer of post-quantum resistance to each peer.
-- The web UI port (51821) is bound to `127.0.0.1` only — access it via SSH tunnel.
-- For production, replace the plaintext `WG_EASY_PASSWORD` with a bcrypt hash:
-  ```bash
-  docker run ghcr.io/wg-easy/wg-easy wgpw 'YourPassword'
-  ```
-- Rotate keys periodically by deleting the relevant `keys/*.privkey` files and re-running the setup scripts.
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Handshake never completes | Firewall blocking UDP 51820 | Open the port on the server's firewall / security group |
-| Site-B can't reach Site-A hosts | `ip_forward` not enabled on gateway | `sysctl -w net.ipv4.ip_forward=1` on the gateway, add to `/etc/sysctl.conf` for persistence |
-| Streaming still shows wrong region | DNS leak | Ensure `DNS` in road-warrior config points to the VPN's DNS, and DNS leak test passes at [dnsleaktest.com](https://dnsleaktest.com) |
-| `wg show` shows 0 bytes received | Wrong public key on either end | Re-run setup scripts; check keys match between server and client `[Peer]` blocks |
-| Container exits immediately | Missing `NET_ADMIN` capability or older kernel | Verify kernel ≥ 5.6: `uname -r`; install `wireguard-dkms` on older kernels |
+Este proyecto se desarrolla con [OpenSpec](https://github.com/Fission-AI/OpenSpec):
+en `openspec/` está el porqué de cada decisión de diseño, incluidas las
+alternativas que se descartaron y el motivo.
