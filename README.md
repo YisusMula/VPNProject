@@ -395,6 +395,31 @@ Para volver atrás, borra esa línea y ejecuta `./deploy.sh` otra vez.
 
 ---
 
+## Comprobar que el proyecto sigue sano
+
+Además del diagnóstico de tu instalación, el repositorio trae un banco de
+pruebas que verifica el proyecto **contra un servidor VPN real**, no simulado:
+
+```bash
+./tests/lib-test.sh     # funciones de detección (rápido, no levanta nada)
+./tests/run-tests.sh    # ciclo completo contra un servidor real
+```
+
+El banco levanta su propio servidor, da de alta dispositivos, comprueba los dos
+modos de túnel, revoca uno y verifica que **deja de conectar de verdad**, mira
+la tabla de rutas del cliente y prueba la copia con su restauración. Al terminar
+lo borra todo, incluso si algo falla.
+
+No toca tu instalación: usa su propio proyecto de Docker, su propio volumen y su
+propia configuración. Tu `.env`, tus claves y tus dispositivos quedan intactos.
+
+> Si tu equipo tiene WireGuard en el kernel —lo normal—, el banco lo usa
+> directamente. Si no, intenta compilar la implementación en espacio de usuario
+> (necesita Go). Y si no puede ninguna de las dos, **omite** las pruebas de
+> túnel diciéndolo claramente, en vez de darlas por buenas.
+
+---
+
 ## Estructura
 
 ```
@@ -409,6 +434,10 @@ VPNProject/
 │   ├── remove-client.sh      # revocación de dispositivos
 │   ├── backup.sh             # copia y restauración
 │   └── doctor.sh             # diagnóstico (sólo lectura)
+├── tests/
+│   ├── run-tests.sh          # banco de pruebas contra servidor real
+│   ├── lib-test.sh           # pruebas de las funciones de detección
+│   └── fixtures/             # trazas fijas: CGNAT, doble NAT, etc.
 └── openspec/                 # especificación del proyecto
 ```
 

@@ -231,13 +231,41 @@ PEERS_TOTAL=0
 PEERS_CON_HANDSHAKE=0
 
 if [[ "$FUENTE_DATOS" == "api" ]]; then
-  read -r PEERS_TOTAL PEERS_CON_HANDSHAKE < <(
+  # Ojo: 'read < <(cmd)' devuelve 1 si cmd no imprime nada, y bajo 'set -e' eso
+  # aborta el diagnóstico a media ejecución, saltándose las secciones que
+  # quedan. Con un JSON truncado del panel pasaría exactamente eso. De ahí que
+  # python nunca deje de imprimir y que el read lleve '|| true'.
+  PARSE_OK="no"
+  read -r PEERS_TOTAL PEERS_CON_HANDSHAKE PARSE_OK < <(
     printf '%s' "$CLIENTES_JSON" | python3 -c '
 import json, sys
-cs = json.load(sys.stdin)
-print(len(cs), sum(1 for c in cs if c.get("latestHandshakeAt")))
-'
-  )
+try:
+    cs = json.load(sys.stdin)
+    print(len(cs), sum(1 for c in cs if c.get("latestHandshakeAt")), "si")
+except Exception:
+    print(0, 0, "no")
+' 2>/dev/null || printf '0 0 no\n'
+  ) || true
+
+  # Un JSON que no parsea no es "cero dispositivos": es que no sabemos nada.
+  # Decirlo como si no hubiera ninguno mandaría al usuario a crear uno que ya
+  # tiene. Se degrada al camino de 'wg show', que al menos es cierto.
+  if [[ "$PARSE_OK" != "si" ]]; then
+    FUENTE_DATOS="ninguna"
+    PEERS_TOTAL=0
+    PEERS_CON_HANDSHAKE=0
+    HANDSHAKES="$(docker exec wg-easy wg show wg0 latest-handshakes 2>/dev/null || true)"
+    if [[ -n "$HANDSHAKES" ]]; then
+      FUENTE_DATOS="wg"
+      while read -r _pub ts; do
+        [[ -n "${ts:-}" ]] || continue
+        PEERS_TOTAL=$((PEERS_TOTAL + 1))
+        if [[ "$ts" != "0" ]]; then
+          PEERS_CON_HANDSHAKE=$((PEERS_CON_HANDSHAKE + 1))
+        fi
+      done <<<"$HANDSHAKES"
+    fi
+  fi
 elif [[ "$FUENTE_DATOS" == "wg" ]]; then
   while read -r _pub ts; do
     [[ -n "${ts:-}" ]] || continue
