@@ -33,6 +33,17 @@ fi
 
 WG_PORT="${WG_PORT:-51820}"
 
+# El puerto que hay que abrir en el router es el que usan los clientes, que no
+# tiene por qué ser el de escucha: WG_CONFIG_PORT permite publicar uno distinto
+# cuando la operadora filtra el habitual. Aconsejar el puerto equivocado es peor
+# que no aconsejar nada: el usuario configura el router y sigue sin funcionar.
+WG_PORT_EXTERNO="${WG_CONFIG_PORT:-$WG_PORT}"
+if [[ "$WG_PORT_EXTERNO" != "$WG_PORT" ]]; then
+  PUERTO_NOTA=" (externo $WG_PORT_EXTERNO -> interno $WG_PORT)"
+else
+  PUERTO_NOTA=""
+fi
+
 # ---------------------------------------------------------------------------
 head1 "1. Tu conexión a internet"
 # ---------------------------------------------------------------------------
@@ -82,18 +93,18 @@ elif ((NAT_LEVELS >= 2)); then
   accion "Hay que reenviar el puerto en LOS DOS, o no entrará nada:"
   accion ""
   accion "  a) En el router SECUNDARIO (el Archer, el más cercano a este equipo):"
-  accion "       Protocolo UDP, puerto externo $WG_PORT, puerto interno $WG_PORT"
+  accion "       Protocolo UDP, puerto externo $WG_PORT_EXTERNO, puerto interno $WG_PORT"
   accion "       Destino: ${LAN_IP:-<la IP de este servidor>}"
   accion ""
   accion "  b) En el router PRINCIPAL (el de la operadora, el Huawei):"
-  accion "       Protocolo UDP, puerto externo $WG_PORT, puerto interno $WG_PORT"
+  accion "       Protocolo UDP, puerto externo $WG_PORT_EXTERNO, puerto interno $WG_PORT_EXTERNO"
   accion "       Destino: la IP WAN del router secundario"
   accion ""
   accion "  Alternativa que ahorra el paso (b): poner el router secundario en"
   accion "  modo punto de acceso. Así sólo queda un nivel de NAT."
 elif ((NAT_LEVELS == 1)); then
   check_ok "Un solo nivel de NAT: basta con una regla de reenvío."
-  accion "En tu router: UDP $WG_PORT -> ${LAN_IP:-<la IP de este servidor>}"
+  accion "En tu router: UDP $WG_PORT_EXTERNO -> ${LAN_IP:-<la IP de este servidor>}:$WG_PORT"
 else
   check_warn "No se detectó NAT entre este equipo e internet (¿IP pública directa?)."
 fi
@@ -178,7 +189,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-head1 "4. El puerto $WG_PORT/UDP visto desde fuera"
+head1 "4. El puerto $WG_PORT_EXTERNO/UDP visto desde fuera$PUERTO_NOTA"
 # ---------------------------------------------------------------------------
 
 # Un puerto UDP abierto y uno filtrado se comportan igual desde fuera: ambos
@@ -353,6 +364,85 @@ else
       accion "    DUCKDNS_SUBDOMAIN=tu-dominio DUCKDNS_TOKEN=tu-token ./deploy.sh"
     fi
   fi
+fi
+
+# ---------------------------------------------------------------------------
+head1 "7. Salud del equipo a largo plazo"
+# ---------------------------------------------------------------------------
+# Nada de lo que sigue impide desplegar. Son las cosas que hacen que la VPN
+# funcione mal, o deje de funcionar meses después, sin que el síntoma apunte
+# hacia ellas.
+
+# ---- Tamaño de paquete ------------------------------------------------------
+# El fallo más común de WireGuard y el más difícil de atribuir: si el camino
+# admite menos de lo que usa el túnel y el ICMP que lo avisaría viene filtrado
+# (lo normal en routers domésticos), los paquetes grandes se pierden en
+# silencio. Conecta, las webs pequeñas cargan, las descargas se cuelgan.
+read -r PATH_MTU MTU_STATE < <(detect_path_mtu)
+MTU_TUNEL="${WG_MTU:-1420}"
+
+if [[ "$MTU_STATE" != "ok" ]]; then
+  check_warn "No se pudo medir el tamaño máximo de paquete hasta internet."
+  accion "Si el túnel conecta pero las descargas o algunas webs se quedan"
+  accion "colgadas a medias, es casi seguro este problema. Prueba a poner"
+  accion "    WG_MTU=1280   en .env  y ejecuta ./deploy.sh"
+  if ! has_cmd ping; then
+    accion "Para que este diagnóstico pueda medirlo:  sudo apt install iputils-ping"
+  fi
+else
+  MTU_RECOMENDADO=$((PATH_MTU - WG_MTU_OVERHEAD))
+  if ((MTU_TUNEL > MTU_RECOMENDADO)); then
+    check_fail "El túnel usa paquetes de $MTU_TUNEL, pero por tu conexión sólo caben $PATH_MTU."
+    accion "Síntoma: el túnel conecta y parece ir, pero las descargas grandes y"
+    accion "algunas webs se quedan a medias sin dar error."
+    accion "Arréglalo añadiendo esta línea a .env y ejecutando ./deploy.sh:"
+    accion "    WG_MTU=$MTU_RECOMENDADO"
+    accion "(margen de $WG_MTU_OVERHEAD bytes sobre los $PATH_MTU que admite tu camino)"
+  else
+    check_ok "Tamaño de paquete correcto: el camino admite $PATH_MTU y el túnel usa $MTU_TUNEL."
+  fi
+fi
+
+# ---- Hora del sistema -------------------------------------------------------
+# El intercambio de claves de WireGuard lleva marca de tiempo contra
+# repeticiones. Una Raspberry Pi no tiene reloj con pila: tras un corte de luz
+# arranca con la hora mal y nadie puede conectar, sin que el error lo mencione.
+read -r SKEW SKEW_STATE < <(detect_clock_skew)
+
+if [[ "$SKEW_STATE" != "ok" ]]; then
+  check_warn "No se pudo comprobar la hora del sistema."
+elif ((SKEW > 60)); then
+  check_fail "El reloj de este equipo está desviado $SKEW segundos."
+  accion "WireGuard marca cada negociación con la hora para evitar repeticiones."
+  accion "Con el reloj mal, el servidor descarta los intentos de tus dispositivos"
+  accion "y NADIE puede conectar, sin que el error diga nada de la hora."
+  accion "Corrígelo de forma permanente:"
+  accion "    sudo timedatectl set-ntp true"
+  accion "    sudo apt install systemd-timesyncd   # si el comando anterior no existe"
+else
+  check_ok "El reloj del sistema está en hora (desviación: $SKEW s)."
+fi
+
+# ---- Arranque automático ----------------------------------------------------
+# 'restart: unless-stopped' revive el contenedor, pero sólo si Docker arranca
+# con el equipo. Si no, un corte de luz deja la VPN caída indefinidamente.
+if has_cmd systemctl; then
+  DOCKER_BOOT="$(systemctl is-enabled docker 2>/dev/null || echo desconocido)"
+  case "$DOCKER_BOOT" in
+    enabled|enabled-runtime|static|indirect)
+      check_ok "Docker arranca solo al encender el equipo." ;;
+    disabled|masked)
+      check_fail "Docker NO arranca al encender el equipo (estado: $DOCKER_BOOT)."
+      accion "Tras un corte de luz la VPN no volverá sola: se quedará caída hasta"
+      accion "que entres a mano. Habilítalo con:"
+      accion "    sudo systemctl enable docker" ;;
+    *)
+      check_warn "No se pudo determinar si Docker arranca con el equipo." ;;
+  esac
+else
+  check_warn "Sin systemctl: no se pudo comprobar el arranque automático de Docker."
+  accion "Asegúrate por tu cuenta de que Docker se inicia al encender el equipo,"
+  accion "o tras un corte de luz la VPN no volverá sola."
 fi
 
 # ---------------------------------------------------------------------------

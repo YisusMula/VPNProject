@@ -38,6 +38,10 @@ services:
       - WG_ALLOWED_IPS=0.0.0.0/0
       # Mantiene viva la asociación NAT de los routers intermedios.
       - WG_PERSISTENT_KEEPALIVE=25
+      # Tamaño máximo de paquete del túnel. Sin definir = el de WireGuard (1420).
+      # Sólo hay que tocarlo si ./scripts/doctor.sh dice que no cabe por tu
+      # conexión: el síntoma es que conecta pero las descargas se cuelgan.
+      - WG_MTU=${WG_MTU:-}
       # Interfaz por la que el CONTENEDOR sale (no la del anfitrión). En la red
       # bridge por defecto de Docker siempre es eth0, que es justo el valor por
       # defecto de la imagen; se declara explícito para que quede a la vista.
@@ -75,6 +79,14 @@ services:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
 
+    # Sin esto los registros crecen sin tope. En la tarjeta SD de una Raspberry
+    # eso acaba llenando el disco y tumbando el equipo entero, no sólo la VPN.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
     healthcheck:
       test: ["CMD", "wg", "show"]
       interval: 30s
@@ -94,6 +106,14 @@ services:
       - TOKEN=${DUCKDNS_TOKEN:-}
       - LOG_FILE=false
       - TZ=${TZ:-Europe/Madrid}
+
+    # Sin esto los registros crecen sin tope. En la tarjeta SD de una Raspberry
+    # eso acaba llenando el disco y tumbando el equipo entero, no sólo la VPN.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   wg_data:

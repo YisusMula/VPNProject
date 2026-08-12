@@ -198,6 +198,81 @@ kernel_has_wireguard() {
   return 1
 }
 
+# detect_path_mtu - Mayor paquete que llega entero hasta internet.
+#
+# Imprime:  <mtu> <estado: ok|unknown>
+#
+# Se sondea con el bit "no fragmentar" y tamaños decrecientes hasta que uno
+# pasa. Leer el MTU de la interfaz local NO serviría: el cuello de botella suele
+# estar en el enlace del operador (PPPoE deja 1492), no en la tarjeta de red.
+#
+# Importa porque cuando el ICMP de "hace falta fragmentar" viene filtrado —lo
+# normal en routers domésticos— los paquetes grandes se pierden en silencio: el
+# túnel conecta, las webs pequeñas cargan y las descargas se quedan colgadas.
+detect_path_mtu() {
+  if ! has_cmd ping; then
+    printf '0 unknown\n'
+    return 0
+  fi
+
+  local destino="${MTU_PROBE_TARGET:-1.1.1.1}"
+  local carga mtu
+  # 28 = 20 de cabecera IP + 8 de cabecera ICMP. La carga útil se sondea, el
+  # MTU es la carga más esos 28.
+  for carga in 1472 1452 1432 1412 1392 1372 1352 1272 1172; do
+    if ping -c1 -W2 -M "do" -s "$carga" "$destino" >/dev/null 2>&1; then
+      mtu=$((carga + 28))
+      printf '%d ok\n' "$mtu"
+      return 0
+    fi
+  done
+
+  printf '0 unknown\n'
+}
+
+# Margen que WireGuard necesita sobre el MTU del camino:
+#   20 (IP) + 8 (UDP) + 32 (cabecera y etiqueta WireGuard) + 20 (seguridad)
+# shellcheck disable=SC2034  # lo consume doctor.sh, que hace source de aquí
+WG_MTU_OVERHEAD=80
+
+# detect_clock_skew - Desviación en segundos entre el reloj del equipo y una
+# referencia externa.
+#
+# Imprime:  <segundos_de_desviacion> <estado: ok|unknown>
+#
+# Se usa la cabecera Date de una petición HTTPS en vez de un cliente NTP: no
+# añade dependencias y la precisión de segundos sobra, porque lo que se quiere
+# detectar son desfases de horas (Raspberry Pi sin pila tras un corte de luz).
+detect_clock_skew() {
+  if ! has_cmd curl || ! has_cmd python3; then
+    printf '0 unknown\n'
+    return 0
+  fi
+
+  local url="${CLOCK_REF_URL:-https://www.cloudflare.com}"
+  local fecha
+  fecha="$(curl -sS -I --max-time 8 "$url" 2>/dev/null \
+    | grep -i '^date:' | head -n1 | sed 's/^[Dd]ate:[[:space:]]*//' | tr -d '\r' || true)"
+
+  if [[ -z "$fecha" ]]; then
+    printf '0 unknown\n'
+    return 0
+  fi
+
+  python3 -c '
+import sys
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
+try:
+    remoto = parsedate_to_datetime(sys.argv[1])
+    if remoto.tzinfo is None:
+        remoto = remoto.replace(tzinfo=timezone.utc)
+    print(int(abs((datetime.now(timezone.utc) - remoto).total_seconds())), "ok")
+except Exception:
+    print(0, "unknown")
+' "$fecha" 2>/dev/null || printf '0 unknown\n'
+}
+
 # Carga un fichero .env exportando sus variables, ignorando comentarios.
 load_env_file() {
   local file="$1"

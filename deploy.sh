@@ -265,10 +265,27 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-if curl -fsS --max-time 3 --noproxy '*' "$UI_URL/api/session" >/dev/null 2>&1; then
-  ok "Servidor VPN en marcha"
+# Que responda el panel NO significa que haya túnel: el servidor web se levanta
+# con independencia de wg0. Dar por bueno un despliegue así es peor que fallar,
+# porque manda al usuario a configurar el router para un problema que no está
+# ahí. Se comprueba que la interfaz del túnel existe de verdad.
+TUNEL_OK="no"
+for _ in $(seq 1 15); do
+  if docker compose exec -T wg-easy wg show wg0 >/dev/null 2>&1; then
+    TUNEL_OK="si"
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$TUNEL_OK" == "si" ]]; then
+  ok "Servidor VPN en marcha y túnel operativo"
 else
-  warn "El panel aún no responde. Revisa el estado con: docker compose logs wg-easy"
+  fail "El servidor arrancó pero el TÚNEL no está levantado."
+  info "El panel puede responder igualmente: son cosas independientes."
+  info "Mira la causa con:  docker compose logs --tail 30 wg-easy"
+  info "Si dice \"Cannot find device wg0\", al kernel le falta WireGuard:"
+  info "    sudo apt install wireguard-dkms wireguard-tools"
 fi
 
 # ---------------------------------------------------------------------------

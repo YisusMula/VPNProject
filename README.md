@@ -336,6 +336,34 @@ docker compose pull && ./deploy.sh     # actualizar
 
 ---
 
+## Si conecta pero va mal
+
+Hay un fallo de WireGuard que despista a todo el mundo: **el túnel conecta, las
+webs pequeñas cargan, y las descargas grandes o algunas páginas se quedan
+colgadas para siempre sin dar error**.
+
+La causa es el tamaño de paquete. WireGuard usa 1420 bytes por defecto, pero si
+tu conexión admite menos —el PPPoE de muchas fibras deja 1492, y detrás de dos
+routers puede ser menos— los paquetes grandes se pierden. Y como los routers
+domésticos suelen filtrar el aviso ICMP que lo señalaría, nadie te dice nada:
+simplemente no llegan.
+
+```bash
+./scripts/doctor.sh
+```
+
+El apartado 7 lo mide y te da el número exacto. Si te dice que no cabe, añade a
+`.env` la línea que te indique y vuelve a desplegar:
+
+```bash
+echo "WG_MTU=1320" >> .env    # el valor concreto lo dice el diagnóstico
+./deploy.sh
+```
+
+Para volver atrás, borra esa línea y ejecuta `./deploy.sh` otra vez.
+
+---
+
 ## Problemas frecuentes
 
 | Síntoma | Causa habitual | Solución |
@@ -346,6 +374,8 @@ docker compose pull && ./deploy.sh     # actualizar
 | El contenedor se reinicia sin parar | Al kernel le falta WireGuard | `sudo apt install wireguard-dkms wireguard-tools` |
 | Conecta pero no hay internet | Falta el enmascarado o el reenvío IP | `./scripts/doctor.sh`, apartado 3 |
 | Conecta, hay internet, pero no veo mi NAS | El servidor no está en la misma subred que el NAS, o el NAS tiene cortafuegos | Comprueba la subred del servidor y las reglas del NAS |
+| **Conecta pero las descargas se cuelgan a medias** | El tamaño de paquete no cabe por tu conexión | `./scripts/doctor.sh` te da el `WG_MTU` exacto. Es el fallo más común y el que menos lo parece |
+| **No conecta nadie tras un corte de luz** | El reloj del equipo se desajustó, o Docker no arrancó solo | `./scripts/doctor.sh`, apartado 7 |
 | El streaming me sigue viendo fuera | Fuga de DNS | Comprueba en [dnsleaktest.com](https://dnsleaktest.com) que sale tu DNS de casa |
 | El panel rechaza la contraseña | Cambiaste `WG_EASY_PASSWORD` a mano | `./deploy.sh` para recalcular el hash |
 
